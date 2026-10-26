@@ -17,10 +17,13 @@ import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.TextView;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /** Watches TikTok only, recognises the video on screen and shows a bubble for saved comments. */
@@ -32,6 +35,7 @@ public class BubbleService extends AccessibilityService {
 
     // Read by the app's screens for the debug view and when saving a share.
     static volatile Set<String> lastTexts = Collections.emptySet();
+    static volatile Matcher.VideoKey lastVideo;
     static volatile String lastDump = "";
     static volatile String lastTikTokPackage = "com.zhiliaoapp.musically";
     static volatile String lastMatchInfo = "";
@@ -42,7 +46,8 @@ public class BubbleService extends AccessibilityService {
     private WindowManager wm;
     private TextView bubble;
     private String shownItemId;
-    private Set<String> dismissedScreen = Collections.emptySet();
+    private String dismissedScreen = "";
+    private String creatorText, captionText, soundText;
     private final Runnable scan = this::scan;
 
     @Override
@@ -77,23 +82,46 @@ public class BubbleService extends AccessibilityService {
         }
         Set<String> texts = new LinkedHashSet<>();
         StringBuilder dump = new StringBuilder();
+        creatorText = captionText = soundText = null;
         walk(root, 0, texts, dump);
         matcher.observe(texts);
         lastTexts = texts;
         lastDump = dump.toString();
 
-        Matcher.Result r = matcher.best(texts, Store.all(this));
-        if (r == null) {
-            lastMatchInfo = "No match. On screen (distinctive): " + matcher.distinctive(texts);
+        Matcher.VideoKey video = new Matcher.VideoKey(creatorText, captionText, soundText);
+        // Comment and share sheets hide the caption; keep the last video seen in the feed.
+        if (video.valid()) lastVideo = video;
+        String screenId = video.valid() ? video.toString() : String.valueOf(matcher.distinctive(texts));
+
+        List<Store.Item> items = Store.all(this);
+        Store.Item found = null;
+        if (video.valid()) {
+            for (Store.Item it : items) {
+                if (video.sameVideo(it.key())) {
+                    found = it;
+                    break;
+                }
+            }
+        }
+        if (found != null) {
+            lastMatchInfo = "Match: " + found.label() + "\nVideo: " + video;
+        } else {
+            List<Store.Item> oldItems = new ArrayList<>();
+            for (Store.Item it : items) if (it.creator == null) oldItems.add(it);
+            Matcher.Result r = matcher.best(texts, oldItems);
+            if (r != null) {
+                found = r.item;
+                lastMatchInfo = String.format("Match by texts %.0f%%: %s", r.score * 100, r.item.label());
+            } else {
+                lastMatchInfo = "No match (" + items.size() + " saved). Video on screen: "
+                        + (video.valid() ? video : "not recognised");
+            }
+        }
+        if (found == null || screenId.equals(dismissedScreen)) {
             hideBubble();
             return;
         }
-        lastMatchInfo = String.format("Match %.0f%% (%d texts): %s", r.score * 100, r.hits, r.item.label());
-        if (matcher.distinctive(texts).equals(dismissedScreen)) {
-            hideBubble();
-            return;
-        }
-        showBubble(r.item, texts);
+        showBubble(found, screenId);
     }
 
     private void walk(AccessibilityNodeInfo n, int depth, Set<String> texts, StringBuilder dump) {
@@ -103,6 +131,15 @@ public class BubbleService extends AccessibilityService {
             String d = Matcher.normalize(n.getContentDescription());
             if (t != null) texts.add(t);
             if (d != null) texts.add(d);
+            String id = n.getViewIdResourceName();
+            if (id != null && n.getText() != null) {
+                if (id.endsWith(":id/title") && creatorText == null) creatorText = n.getText().toString();
+                else if (id.endsWith(":id/desc") && captionText == null) captionText = n.getText().toString();
+            }
+            CharSequence cd = n.getContentDescription();
+            if (cd != null && soundText == null && cd.toString().toLowerCase(Locale.ROOT).startsWith("sound:")) {
+                soundText = cd.toString().substring(6);
+            }
             if (t != null || d != null || n.getViewIdResourceName() != null) {
                 for (int i = 0; i < Math.min(depth, 12); i++) dump.append("  ");
                 dump.append(n.getClassName() == null ? "?" : shortName(n.getClassName().toString()));
@@ -120,7 +157,7 @@ public class BubbleService extends AccessibilityService {
         return i < 0 ? cls : cls.substring(i + 1);
     }
 
-    private void showBubble(Store.Item item, Set<String> screen) {
+    private void showBubble(Store.Item item, String screenKey) {
         if (bubble != null && item.id.equals(shownItemId)) return;
         hideBubble();
         float dp = getResources().getDisplayMetrics().density;
@@ -139,7 +176,6 @@ public class BubbleService extends AccessibilityService {
         v.setBackground(bg);
         v.setElevation(6 * dp);
 
-        Set<String> screenKey = matcher.distinctive(screen);
         v.setOnClickListener(x -> {
             dismissedScreen = screenKey;
             hideBubble();

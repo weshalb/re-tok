@@ -26,7 +26,14 @@ final class Store {
         String who;
         String note;
         Set<String> texts = new HashSet<>();
+        String creator;
+        String caption;
+        String sound;
         long createdAt;
+
+        Matcher.VideoKey key() {
+            return creator == null ? null : new Matcher.VideoKey(creator, caption, sound);
+        }
 
         JSONObject toJson() throws JSONException {
             JSONObject o = new JSONObject();
@@ -36,6 +43,9 @@ final class Store {
             o.put("note", note);
             o.put("texts", new JSONArray(texts));
             o.put("createdAt", createdAt);
+            if (creator != null) o.put("creator", creator);
+            if (caption != null) o.put("caption", caption);
+            if (sound != null) o.put("sound", sound);
             return o;
         }
 
@@ -48,6 +58,9 @@ final class Store {
             JSONArray a = o.optJSONArray("texts");
             if (a != null) for (int i = 0; i < a.length(); i++) it.texts.add(a.getString(i));
             it.createdAt = o.optLong("createdAt", System.currentTimeMillis());
+            it.creator = o.optString("creator", null);
+            it.caption = o.optString("caption", null);
+            it.sound = o.optString("sound", null);
             return it;
         }
 
@@ -95,13 +108,18 @@ final class Store {
         save(c, items);
     }
 
-    static Item newItem(String link, String who, String note, Collection<String> texts) {
+    static Item newItem(String link, String who, String note, Collection<String> texts, Matcher.VideoKey video) {
         Item it = new Item();
         it.id = UUID.randomUUID().toString();
         it.link = link;
         it.who = who;
         it.note = note;
         it.texts.addAll(texts);
+        if (video != null && video.valid()) {
+            it.creator = video.creator;
+            it.caption = video.caption;
+            it.sound = video.sound;
+        }
         it.createdAt = System.currentTimeMillis();
         return it;
     }

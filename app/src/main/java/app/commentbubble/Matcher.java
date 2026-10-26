@@ -52,6 +52,46 @@ final class Matcher {
         return out;
     }
 
+    /** The video on screen, from TikTok's creator name, caption and sound views. */
+    static final class VideoKey {
+        final String creator;
+        final String caption;
+        final String sound;
+
+        VideoKey(String creator, String caption, String sound) {
+            this.creator = clean(creator);
+            this.caption = clean(caption);
+            this.sound = clean(sound);
+        }
+
+        boolean valid() {
+            return creator != null && (caption != null || sound != null);
+        }
+
+        /** Captions can be cut off ("… mehr") at different lengths, so compare their start. */
+        boolean sameVideo(VideoKey o) {
+            if (o == null || creator == null || !creator.equals(o.creator)) return false;
+            if (caption != null && o.caption != null) {
+                int n = Math.min(40, Math.min(caption.length(), o.caption.length()));
+                return n >= 3 && caption.regionMatches(0, o.caption, 0, n);
+            }
+            if (caption == null && o.caption == null) return sound != null && sound.equals(o.sound);
+            return false;
+        }
+
+        @Override
+        public String toString() {
+            return creator + " – " + (caption != null ? caption : "(no caption)") + (sound != null ? " – " + sound : "");
+        }
+
+        static String clean(String s) {
+            if (s == null) return null;
+            s = s.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+            s = s.replaceAll("(\\s*(…|\\.\\.\\.)\\s*)?(mehr|more)$", "").replaceAll("(…|\\.\\.\\.)$", "").trim();
+            return s.isEmpty() ? null : s;
+        }
+    }
+
     static final class Result {
         Store.Item item;
         double score;
