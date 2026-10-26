@@ -29,6 +29,7 @@ final class Store {
         String creator;
         String caption;
         String sound;
+        boolean mine;
         long createdAt;
 
         Matcher.VideoKey key() {
@@ -46,6 +47,7 @@ final class Store {
             if (creator != null) o.put("creator", creator);
             if (caption != null) o.put("caption", caption);
             if (sound != null) o.put("sound", sound);
+            o.put("mine", mine);
             return o;
         }
 
@@ -61,12 +63,23 @@ final class Store {
             it.creator = o.optString("creator", null);
             it.caption = o.optString("caption", null);
             it.sound = o.optString("sound", null);
+            it.mine = o.optBoolean("mine", true);
             return it;
         }
 
+        String name() {
+            if (mine) return "Du";
+            return who.isEmpty() ? "Freund*in" : who;
+        }
+
         String label() {
-            String w = who.isEmpty() ? "Someone" : who;
-            return note.isEmpty() ? w + " saved a comment" : w + ": " + note;
+            return note.isEmpty() ? name() + " hat einen Kommentar repostet" : name() + ": " + note;
+        }
+
+        /** Creator and caption of the video, for list screens. */
+        String videoLabel() {
+            if (creator == null) return "Video";
+            return caption == null ? creator : creator + " · " + caption;
         }
     }
 
@@ -115,6 +128,7 @@ final class Store {
         it.who = who;
         it.note = note;
         it.texts.addAll(texts);
+        it.mine = true;
         if (video != null && video.valid()) {
             it.creator = video.creator;
             it.caption = video.caption;
@@ -128,7 +142,10 @@ final class Store {
     static String export(Item it) throws JSONException {
         String b64 = Base64.encodeToString(it.toJson().toString().getBytes(StandardCharsets.UTF_8),
                 Base64.NO_WRAP | Base64.URL_SAFE);
-        return it.label() + "\n" + it.link + "\nOpen in Comment Bubble: " + EXPORT_PREFIX + b64;
+        String from = it.who.isEmpty() ? "Ich" : it.who;
+        String note = it.note.isEmpty() ? "" : " „" + it.note + "“";
+        return from + " hat einen Kommentar repostet" + note + "\n" + it.link
+                + "\nIn ReTok öffnen: " + EXPORT_PREFIX + b64;
     }
 
     /** Returns the item embedded in a shared text, or null. */
@@ -139,7 +156,9 @@ final class Store {
         while (end < text.length() && !Character.isWhitespace(text.charAt(end))) end++;
         try {
             byte[] raw = Base64.decode(text.substring(i + EXPORT_PREFIX.length(), end), Base64.URL_SAFE);
-            return Item.fromJson(new JSONObject(new String(raw, StandardCharsets.UTF_8)));
+            Item it = Item.fromJson(new JSONObject(new String(raw, StandardCharsets.UTF_8)));
+            it.mine = false;
+            return it;
         } catch (IllegalArgumentException | JSONException e) {
             return null;
         }

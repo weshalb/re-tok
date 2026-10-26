@@ -4,17 +4,18 @@ import android.accessibilityservice.AccessibilityService;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.graphics.PixelFormat;
-import android.graphics.drawable.GradientDrawable;
+import android.graphics.Rect;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
-import android.util.TypedValue;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
-import android.view.View;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -26,14 +27,18 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** Watches TikTok only, recognises the video on screen and shows a bubble for saved comments. */
+/**
+ * Watches TikTok only, recognises the video on screen and floats the reposted comments for it
+ * just above the creator name and caption.
+ */
 public class BubbleService extends AccessibilityService {
     static final Set<String> TIKTOK = new HashSet<>(Arrays.asList("com.zhiliaoapp.musically", "com.ss.android.ugc.trill"));
     private static final int TYPE_ACCESSIBILITY_OVERLAY = 2032;
-    private static final long DEBOUNCE_MS = 350;
+    private static final long DEBOUNCE_MS = 300;
     private static final int MAX_DEPTH = 40;
+    private static final int MAX_CHIPS = 3;
 
-    // Read by the app's screens for the debug view and when saving a share.
+    // Read by the app's screens for the test info and when saving a share.
     static volatile Set<String> lastTexts = Collections.emptySet();
     static volatile Matcher.VideoKey lastVideo;
     static volatile String lastDump = "";
@@ -44,10 +49,12 @@ public class BubbleService extends AccessibilityService {
     private final Matcher matcher = new Matcher();
     private Handler handler;
     private WindowManager wm;
-    private TextView bubble;
-    private String shownItemId;
+    private LinearLayout overlay;
+    private WindowManager.LayoutParams overlayParams;
+    private String shownKey;
     private String dismissedScreen = "";
     private String creatorText, captionText, soundText;
+    private final Rect creatorBounds = new Rect();
     private final Runnable scan = this::scan;
 
     @Override
@@ -64,7 +71,7 @@ public class BubbleService extends AccessibilityService {
         String pkg = p.toString();
         if (pkg.equals(getPackageName())) return;
         if (!TIKTOK.contains(pkg)) {
-            if (e.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) hideBubble();
+            if (e.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) hideOverlay();
             return;
         }
         lastTikTokPackage = pkg;
@@ -77,12 +84,13 @@ public class BubbleService extends AccessibilityService {
         if (root == null) return;
         CharSequence pkg = root.getPackageName();
         if (pkg == null || !TIKTOK.contains(pkg.toString())) {
-            hideBubble();
+            hideOverlay();
             return;
         }
         Set<String> texts = new LinkedHashSet<>();
         StringBuilder dump = new StringBuilder();
         creatorText = captionText = soundText = null;
+        creatorBounds.setEmpty();
         walk(root, 0, texts, dump);
         matcher.observe(texts);
         lastTexts = texts;
@@ -91,37 +99,26 @@ public class BubbleService extends AccessibilityService {
         Matcher.VideoKey video = new Matcher.VideoKey(creatorText, captionText, soundText);
         // Comment and share sheets hide the caption; keep the last video seen in the feed.
         if (video.valid()) lastVideo = video;
-        String screenId = video.valid() ? video.toString() : String.valueOf(matcher.distinctive(texts));
+        // A hidden bubble stays hidden only until the next video.
+        if (video.valid() && !video.toString().equals(dismissedScreen)) dismissedScreen = "";
 
-        List<Store.Item> items = Store.all(this);
-        Store.Item found = null;
+        List<Store.Item> found = new ArrayList<>();
         if (video.valid()) {
-            for (Store.Item it : items) {
-                if (video.sameVideo(it.key())) {
-                    found = it;
-                    break;
-                }
-            }
+            for (Store.Item it : Store.all(this)) if (video.sameVideo(it.key())) found.add(it);
         }
-        if (found != null) {
-            lastMatchInfo = "Match: " + found.label() + "\nVideo: " + video;
-        } else {
-            List<Store.Item> oldItems = new ArrayList<>();
-            for (Store.Item it : items) if (it.creator == null) oldItems.add(it);
-            Matcher.Result r = matcher.best(texts, oldItems);
-            if (r != null) {
-                found = r.item;
-                lastMatchInfo = String.format("Match by texts %.0f%%: %s", r.score * 100, r.item.label());
-            } else {
-                lastMatchInfo = "No match (" + items.size() + " saved). Video on screen: "
-                        + (video.valid() ? video : "not recognised");
-            }
-        }
-        if (found == null || screenId.equals(dismissedScreen)) {
-            hideBubble();
+        int saved = Store.all(this).size();
+        if (found.isEmpty()) {
+            lastMatchInfo = "Kein Treffer (" + saved + " gespeichert). Video: " + (video.valid() ? video : "nicht erkannt");
+            hideOverlay();
             return;
         }
-        showBubble(found, screenId);
+        String screenId = video.toString();
+        lastMatchInfo = found.size() + " Treffer: " + found.get(0).label() + "\nVideo: " + video;
+        if (screenId.equals(dismissedScreen)) {
+            hideOverlay();
+            return;
+        }
+        showOverlay(found, screenId);
     }
 
     private void walk(AccessibilityNodeInfo n, int depth, Set<String> texts, StringBuilder dump) {
@@ -133,17 +130,21 @@ public class BubbleService extends AccessibilityService {
             if (d != null) texts.add(d);
             String id = n.getViewIdResourceName();
             if (id != null && n.getText() != null) {
-                if (id.endsWith(":id/title") && creatorText == null) creatorText = n.getText().toString();
-                else if (id.endsWith(":id/desc") && captionText == null) captionText = n.getText().toString();
+                if (id.endsWith(":id/title") && creatorText == null) {
+                    creatorText = n.getText().toString();
+                    n.getBoundsInScreen(creatorBounds);
+                } else if (id.endsWith(":id/desc") && captionText == null) {
+                    captionText = n.getText().toString();
+                }
             }
             CharSequence cd = n.getContentDescription();
             if (cd != null && soundText == null && cd.toString().toLowerCase(Locale.ROOT).startsWith("sound:")) {
                 soundText = cd.toString().substring(6);
             }
-            if (t != null || d != null || n.getViewIdResourceName() != null) {
+            if (t != null || d != null || id != null) {
                 for (int i = 0; i < Math.min(depth, 12); i++) dump.append("  ");
                 dump.append(n.getClassName() == null ? "?" : shortName(n.getClassName().toString()));
-                if (n.getViewIdResourceName() != null) dump.append(" #").append(n.getViewIdResourceName());
+                if (id != null) dump.append(" #").append(id);
                 if (n.getText() != null) dump.append(" text=\"").append(n.getText()).append('"');
                 if (n.getContentDescription() != null) dump.append(" desc=\"").append(n.getContentDescription()).append('"');
                 dump.append('\n');
@@ -157,62 +158,114 @@ public class BubbleService extends AccessibilityService {
         return i < 0 ? cls : cls.substring(i + 1);
     }
 
-    private void showBubble(Store.Item item, String screenKey) {
-        if (bubble != null && item.id.equals(shownItemId)) return;
-        hideBubble();
-        float dp = getResources().getDisplayMetrics().density;
-        TextView v = new TextView(this);
-        v.setText("💬 " + item.label());
-        v.setTextColor(0xFFFFFFFF);
-        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        v.setMaxLines(2);
-        v.setEllipsize(TextUtils.TruncateAt.END);
-        v.setMaxWidth((int) (240 * dp));
-        int pad = (int) (12 * dp);
-        v.setPadding(pad, pad, pad, pad);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xEED0245E);
-        bg.setCornerRadius(20 * dp);
-        v.setBackground(bg);
-        v.setElevation(6 * dp);
+    private int screenHeight() {
+        if (Build.VERSION.SDK_INT >= 30) return wm.getCurrentWindowMetrics().getBounds().height();
+        DisplayMetrics m = new DisplayMetrics();
+        wm.getDefaultDisplay().getRealMetrics(m);
+        return m.heightPixels;
+    }
 
-        v.setOnClickListener(x -> {
-            dismissedScreen = screenKey;
-            hideBubble();
-            openLink(item.link);
-        });
-        v.setOnLongClickListener(x -> {
-            dismissedScreen = screenKey;
-            hideBubble();
-            return true;
-        });
+    /** Distance from the screen bottom so the chips sit just above the creator name. */
+    private int bottomOffset() {
+        int gap = Ui.dp(this, 10);
+        if (creatorBounds.isEmpty()) return (int) (screenHeight() * 0.25f);
+        return screenHeight() - creatorBounds.top + gap;
+    }
+
+    private void showOverlay(List<Store.Item> items, String screenId) {
+        String key = screenId + "#" + items.size();
+        if (overlay != null && key.equals(shownKey)) {
+            // Same video: only follow the creator name if it moved.
+            int y = bottomOffset();
+            int x = creatorBounds.isEmpty() ? Ui.dp(this, 12) : creatorBounds.left;
+            if (overlayParams.y != y || overlayParams.x != x) {
+                overlayParams.y = y;
+                overlayParams.x = x;
+                try {
+                    wm.updateViewLayout(overlay, overlayParams);
+                } catch (RuntimeException ignored) {
+                }
+            }
+            return;
+        }
+        hideOverlay();
+
+        LinearLayout box = Ui.column(this);
+        int shown = Math.min(MAX_CHIPS, items.size());
+        for (int i = 0; i < shown; i++) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i > 0) lp.topMargin = Ui.dp(this, 6);
+            box.addView(chip(items.get(i), screenId), lp);
+        }
+        if (items.size() > shown) {
+            TextView more = Ui.bold(this, "+" + (items.size() - shown) + " weitere", 12, 0xDDFFFFFF);
+            more.setPadding(Ui.dp(this, 10), Ui.dp(this, 4), 0, 0);
+            box.addView(more);
+        }
 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
-        lp.gravity = Gravity.TOP | Gravity.END;
-        lp.x = (int) (12 * dp);
-        lp.y = (int) (getResources().getDisplayMetrics().heightPixels * 0.18f);
+        lp.gravity = Gravity.BOTTOM | Gravity.START;
+        lp.x = creatorBounds.isEmpty() ? Ui.dp(this, 12) : creatorBounds.left;
+        lp.y = bottomOffset();
         try {
-            wm.addView(v, lp);
-            bubble = v;
-            shownItemId = item.id;
+            wm.addView(box, lp);
+            overlay = box;
+            overlayParams = lp;
+            shownKey = key;
         } catch (RuntimeException ignored) {
         }
     }
 
-    private void hideBubble() {
-        if (bubble != null) {
+    /** One semi-transparent pill: avatar letter, name, comment preview. */
+    private LinearLayout chip(Store.Item item, String screenId) {
+        LinearLayout chip = Ui.row(this);
+        int p = Ui.dp(this, 6);
+        chip.setPadding(p, p, Ui.dp(this, 14), p);
+        chip.setBackground(Ui.round(this, 0x8C000000, 22));
+        chip.addView(Ui.avatar(this, item.mine ? "Du" : item.who, 28, item.mine ? Ui.ACCENT : 0xFF6C5CE7));
+        chip.addView(Ui.spacer(this, 8));
+
+        LinearLayout lines = Ui.column(this);
+        lines.addView(Ui.bold(this, item.mine ? "Dein Repost" : item.name() + " hat repostet", 12, 0xFFFFFFFF));
+        TextView preview = Ui.text(this, item.note.isEmpty() ? "Zum Kommentar springen ›" : "„" + item.note + "“",
+                13, 0xE6FFFFFF);
+        preview.setMaxLines(2);
+        preview.setEllipsize(TextUtils.TruncateAt.END);
+        preview.setMaxWidth(Ui.dp(this, 230));
+        lines.addView(preview);
+        chip.addView(lines);
+
+        chip.setOnClickListener(v -> {
+            dismissedScreen = screenId;
+            hideOverlay();
+            openLink(item.link);
+        });
+        chip.setOnLongClickListener(v -> {
+            dismissedScreen = screenId;
+            hideOverlay();
+            return true;
+        });
+        return chip;
+    }
+
+    private void hideOverlay() {
+        if (overlay != null) {
             try {
-                wm.removeView(bubble);
+                wm.removeView(overlay);
             } catch (RuntimeException ignored) {
             }
         }
-        bubble = null;
-        shownItemId = null;
+        overlay = null;
+        overlayParams = null;
+        shownKey = null;
     }
 
     private void openLink(String link) {
@@ -229,13 +282,13 @@ public class BubbleService extends AccessibilityService {
 
     @Override
     public void onInterrupt() {
-        hideBubble();
+        hideOverlay();
     }
 
     @Override
     public void onDestroy() {
         running = false;
-        hideBubble();
+        hideOverlay();
         super.onDestroy();
     }
 }

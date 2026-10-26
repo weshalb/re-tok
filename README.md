@@ -1,9 +1,9 @@
-# Comment Bubble (test build)
+# ReTok (test build)
 
 Android test app: while TikTok is open, it recognises the video on screen and shows a floating bubble when a comment on that video was saved (by you or a friend). Tapping the bubble opens TikTok's own comment link.
 
 ## Build
-GitHub Actions builds `CommentBubble.apk` on every push to `main` and publishes it as a release. Locally: `gradle assembleDebug` (needs the Android SDK).
+GitHub Actions builds `ReTok.apk` on every push to `main` and publishes it as a release. Locally: `gradle assembleDebug` (needs the Android SDK).
 
 ## How it works
 - `BubbleService` – accessibility service, only reacts to TikTok (`com.zhiliaoapp.musically`, `com.ss.android.ugc.trill`). Reads visible texts, matches them against saved comments on the device, draws the bubble as an accessibility overlay.

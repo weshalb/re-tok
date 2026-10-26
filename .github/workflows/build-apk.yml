@@ -27,19 +27,19 @@ jobs:
         run: gradle assembleDebug --no-daemon
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk CommentBubble.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ReTok.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: CommentBubble-apk
-          path: CommentBubble.apk
+          name: ReTok.apk
+          path: ReTok.apk
 
       - name: Publish as release (easy phone download)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="build-${{ github.run_number }}"
-          gh release create "$TAG" CommentBubble.apk \
-            --title "Comment Bubble test build ${{ github.run_number }}" \
-            --notes "Test build from commit ${{ github.sha }}. Download CommentBubble.apk on your Android phone and install it." \
+          gh release create "$TAG" ReTok.apk \
+            --title "ReTok test build ${{ github.run_number }}" \
+            --notes "Test build from commit ${{ github.sha }}. Download ReTok.apk on your Android phone and install it." \
             --latest
