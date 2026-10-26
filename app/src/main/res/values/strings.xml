@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Comment Bubble</string>
+    <string name="share_label">Save to Comment Bubble</string>
+    <string name="service_label">Comment Bubble</string>
+    <string name="service_description">Reads the creator name and caption of the TikTok video on your screen, only while TikTok is open, to show a bubble when you or a friend saved a comment on that video. Nothing you watch leaves your phone.</string>
+</resources>

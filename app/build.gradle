@@ -1,0 +1,31 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.commentbubble'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'app.commentbubble'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1-test'
+    }
+
+    // Fixed test key so new builds install over old ones. Not for Play Store releases.
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
